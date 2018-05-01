@@ -1,0 +1,286 @@
+---
+title: "AggressionExperiment_FinalCode"
+author: "Michelle St. John"
+date: "2/6/2018"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+  word_document: default
+editor_options:
+  chunk_output_type: console
+classoption: landscape
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(error = TRUE)
+```
+
+
+```{r setworkingdirectory, echo=FALSE}
+setwd("/Users/mickey7210/Desktop/Experiments-FA2017")
+```
+
+```{r libraries, echo=FALSE, message=FALSE, warning=FALSE}
+library(survival)
+library(ggplot2)
+library(lme4)
+library(Rmisc)
+library(plyr)
+library(car)
+library(effects)
+library(multcomp)
+library(MASS)
+library(AER)
+library(pscl)
+library(fitdistrplus)
+library(ggfortify)
+library(survminer)
+library(coxme)
+library(emmeans)
+library(lsmeans)
+library(stargazer)
+library(xtable)
+```
+
+```{r theme_for_graphs, echo=FALSE}
+mytheme <- theme_bw() + 
+  theme(
+    panel.grid.minor=element_blank(), #gets rid of grey and lines in the middle
+    panel.grid.major=element_blank(), #gets rid of grey and lines in the middle
+    panel.background=element_blank(),#gets rid of grey and lines in the middle
+    plot.background = element_rect(fill = NA),
+    panel.border=element_blank(), #gets rid of square going around the entire graph
+    axis.line = element_line(colour = 'black', size = 1),#sets the axis line size
+    axis.line.y = element_line(colour = 'black', size = 1),#sets the axis line size
+    axis.ticks=element_line(colour = 'black', size = 0.5), #sets the tick lines
+    axis.title.x = element_text(family="Times", size=20, color="black", face="bold"), #size of x-axis title
+    axis.title.y = element_text(family="Times", size=20, color="black", face="bold"), #size of y-axis title
+    axis.text.x = element_text(family="Times", size=20, color="black"), #size of x-axis text
+    legend.key.size = unit(2,"line"),
+    legend.direction="vertical",
+    legend.text = element_text(size=12, color="black", face="bold"),
+    axis.text.y = element_text(family="Times", size=20, color="black"))
+
+```
+
+##Load and format data sets
+
+I started with the full data set that included 279 obersvations. From those I extracted only the first trial for all individuals who participated in >1 trial. Next, I converted raw size measurements to log size measurements. I then changed all 'NA's for the latency to notice metric to 301+seconds for the time to event curves. I then assigned any individual with a >300 score a 0 and anyone with a <300 a 1 for the time to event curves. The same was performed for the latency to attack metric. Finally I replaced all 'NA's for attacks with zeros. 
+
+I next removed all juveniles from the data set. Finally I only included species A, M, P, and A3 (NC generalits).
+
+The final dataframe (termed DF) has the NC generalist as the base for all comparisons. 
+```{r loaddataset,results='asis',echo=FALSE}
+Fulldata<-read.csv("./Aggression-Data10.24.17.csv")
+
+Aggression<-subset(Fulldata, Trial==1) #Remove trials that measured fish more than once
+Aggression$logsize<-log(Aggression$Size.mm.) #log size measurements
+Aggression$Latency.to.notice.Mirror..seconds.[is.na(Aggression$Latency.to.notice.Mirror..seconds.)]<-301 
+Aggression$LatNatEvent<-ifelse(Aggression$Latency.to.notice.Mirror..seconds.>300,0,1) #assign event status
+Aggression$Latency.to.Attack.Mirror..seconds.[is.na(Aggression$Latency.to.Attack.Mirror..seconds.)]<-301 #Same as above
+Aggression$LatAttEvent<-ifelse(Aggression$Latency.to.Attack.Mirror..seconds.>300,0,1)#Assign event status
+Aggression$Attacks[is.na(Aggression$Attacks)]<-0 #Change NA attacks to 0 for now--Isn't used in this analysis anyways
+
+AGDF<-subset(Aggression,Sex!="JUV") #remove juveniles from dataset
+AGDF$Sex<-factor(AGDF$Sex)#reset number of factors
+AGDF<-subset(AGDF, Species=="A"|Species=="P"|Species=="M"|Species=="A3") 
+AGDF$Species<-factor(AGDF$Species)
+
+DF <- within(AGDF, Species<-relevel(Species, ref = "A3"))
+
+```
+
+## Creating Survival Objects
+
+Next I created survival objects for the time to event curves.
+```{r survivalobject}
+S1<-Surv(time=DF$Latency.to.notice.Mirror..seconds., event =DF$LatNatEvent, type=c("right"))
+
+S2<-Surv(time=DF$Latency.to.Attack.Mirror..seconds., event =DF$LatAttEvent, type=c("right"))
+```
+
+#Latency to Approach mirror Image
+
+First we compared to models: to determine if logsize was a significant covariate
+
+```{r comparemodels}
+model1<-coxme(S1~Species*Sex+(1|Pop), DF)
+model2<-coxme(S1~Species*Sex+(1|Pop)+logsize,DF)
+```
+
+The comparison reveals that logsize is not a significant predictor so it is removed from the final model. Model1 is used moving forward.
+```{r anovacomparingmodels, results='asis', echo=FALSE}
+anova1<-anova(model1,model2)
+stargazer(anova1,summary=FALSE, title="anova comparing models (latency to approach)")
+```
+
+###loglikelihood test on model to determine significant effects
+```{r logliklihoodtestmodel1, results='asis', echo=FALSE}
+anova2<-anova(model1)
+stargazer(anova2, summary=FALSE, title="log likelihood latency to notice model")
+```
+
+The loglikelihood test reveals that sex is the only significant factor predicting the latency to approach the mirror image. When we conduct a pairwise comparison we find that snail-eaters and scale-eaters both approach more than do generalists from north carolina. 
+
+```{r pairwisecomparisonsforlatencytonotice,results='asis', echo=FALSE}
+pairwise1<-pairwise_survdiff(Surv(Latency.to.notice.Mirror..seconds., LatNatEvent) ~ Species,
+                  data = DF,p.adjust.method = "BH")
+stargazer(pairwise1$p.value,summary=FALSE, title="Pariwise Comparison")
+```
+###Latency to approach mirror imagae Graph
+next we create a survfit object to be used to make the time to event graph and then plot the outcome
+```{r survfit1, echo=FALSE}
+fit <- survfit(Surv(time=DF$Latency.to.notice.Mirror..seconds., 
+                    event =DF$LatNatEvent)~ Species+Sex,data = DF)
+```
+
+```{r latencytonoticegraph, echo=FALSE, fig.height=6, fig.width=8}
+latencytonoticegraph<-ggsurvplot(fit, fun="event",
+          pval = F, 
+           risk.table = F,
+           linetype = c(1,4,1,4,1,4,1,4),
+           palette = c("Black","Black","Green","Green","Blue","Blue","Red","Red"),
+           censor.shape=c(" "," "," "," "," "," "," "," "),
+           #censor.shape=c("A:F","NC:F","M:F","P:F","A:M","NC:M","M:M","P:M"),
+           xlab="Time (Seconds)",
+           ylab="Proportion Approaching Mirror",
+           legend=c("right"),
+           legend.title=" ",
+          # legend.labs=c("North Carolina\nGeneralist ♀","North Carolina\nGeneralist♂",
+                        #"San Salvador\nGeneralist ♀","Sa nSalvador\nGeneralist ♂",
+                       # "San Salvador\nSnail-Eater ♀","San Salvador\nSnail-Eater ♂", 
+                       # "San Salvador\nScale-Eater ♀","San Salvador\nScale-Eater ♂"),
+           ggtheme = mytheme)
+
+latencytonoticegraph<-latencytonoticegraph+
+  scale_y_continuous(limits = c(0, 1))
+  #scale_colour_discrete(name   = 'Species',
+   # breaks = c(0,.2,.4,.6,.8),
+    #labels = c('NC','A',"M","P"))
+
+print(latencytonoticegraph)
+
+```
+
+#Latency to Attack Mirror Image
+
+First we compared two models, one without log size and one with log size as a covariate. 
+```{r modelcomparisonlatencytoattack}
+model1<-coxme(S2~Species*Sex+(1|Pop), DF)
+model2<-coxme(S2~Species*Sex+(1|Pop)+logsize, DF)
+```
+
+The comparison reveals that logsize is  a significant predictor so it is included in the final model. Model2 is used moving forward.
+```{r anovacomparinglatencytoattack, results='asis', echo=FALSE}
+anova2<-anova(model1,model2)
+stargazer(anova2,summary=FALSE, title="anova comparing models (Latency to attack)")
+
+aic1<-AIC(model1,model2)
+stargazer(aic1,summary=FALSE, title="AIC (Latency to attack)")
+
+```
+
+Next we used a log likelihood test to determine which effects were significant, and see that species, sex, and their interaction all significantly predict latency to attack. 
+
+```{r logliklihoodlatencytoattack, echo=FALSE, results='asis'}
+anova3<-anova(model2)
+stargazer(anova3,summary=FALSE, title="log likelihood latency to attack model")
+```
+
+Finally, we looked at pairwise comparisons between species & sex.
+```{r pairwisecomparisonlatencytoattack, echo=FALSE, results='asis'}
+PW1<-pairwise_survdiff(Surv(Latency.to.Attack.Mirror..seconds., LatAttEvent) ~ Sex+Species,data = DF,p.adjust.method = "BH")
+
+stargazer(PW1$p.value,summary=FALSE, title="Pariwise Comparison", keep =1:5 )
+
+stargazer(PW1$p.value,summary=FALSE, title="Pariwise Comparison", keep =c(1,6:9))
+
+```
+
+I made a survfit object in order to graph a time to event curve.
+```{r fit2, echo=FALSE, warning=FALSE}
+fit2<-survfit(Surv(time=DF$Latency.to.Attack.Mirror..seconds., 
+                    event =DF$LatAttEvent)~ Species+Sex, data = DF)
+```
+
+###Latency to Attack Mirror Image Graph
+```{r echo=FALSE, fig.height=6, fig.width=8}
+Latencytoattackgrah<-ggsurvplot(fit2, fun="event",
+          pval = F, 
+           risk.table = F,
+           linetype = c(1,4,1,4,1,4,1,4),
+           palette = c("Black","Black","Green","Green","Blue","Blue","Red","Red"),
+           censor.shape=c(" "," "," "," "," "," "," "," "),
+           #censor.shape=c("A:F","NC:F","M:F","P:F","A:M","NC:M","M:M","P:M"),
+           xlab="Time (Seconds)",
+           ylab="Proportion Attacking Mirror",
+           legend=c("right"),
+           legend.title=" ",
+          # legend.labs=c("North Carolina\nGeneralist ♀","North Carolina\nGeneralist♂",
+                        #"San Salvador\nGeneralist ♀","Sa nSalvador\nGeneralist ♂",
+                       # "San Salvador\nSnail-Eater ♀","San Salvador\nSnail-Eater ♂", 
+                       # "San Salvador\nScale-Eater ♀","San Salvador\nScale-Eater ♂"),
+           ggtheme = mytheme)
+Latencytoattackgrah<-Latencytoattackgrah+scale_y_continuous(limits = c(0, 1))
+print(Latencytoattackgrah)
+```
+
+#Total Number of Attacks 
+
+First we compared to negative binomial mixed models to determine if logsize contributes to the variation.We found that there was no significant differences between the models and thus went with the simpler model (Model1).
+```{r TotalAttacksModels, message=FALSE, warning=FALSE, paged.print=TRUE}
+Attacks.NBGLMM1<- glmer.nb(Attacks ~ Species*Sex+(1|Pop), 
+                          data=DF, verbose=TRUE, init.theta=.445, link=log)
+Attacks.NBGLMM2<- glmer.nb(Attacks ~ Species*Sex+(1|Pop)+logsize, 
+                           data=DF, verbose=TRUE, init.theta=.445, link=log)
+```
+
+```{r anovaAICcomparisonattackmodels, echo=FALSE, results='asis'}
+anova3<-anova(Attacks.NBGLMM1,Attacks.NBGLMM2)
+stargazer(anova3,summary=FALSE, title="anova comparing models (Total number of attacks))")
+
+aic3<-AIC(Attacks.NBGLMM1,Attacks.NBGLMM2)
+stargazer(aic3,summary=FALSE, title="AIC (Total number of attacks)")
+```
+
+Next we asked which effects significanlty predicted total number of attacks and found that Sex and the interaction between sex and species were significant effects.
+
+```{r attackwaldchisqare, echo=FALSE, results='asis'}
+anova4<-Anova(Attacks.NBGLMM1)
+stargazer(anova4,summary=FALSE, title="Wald chisquare test-Total number of attacks")
+```
+
+Next we looked at pairwise comparisons using Tukey's HSD 
+```{r echo=FALSE, results='asis'}
+test<-lsmeans(Attacks.NBGLMM1, list(pairwise~ Sex*Species), adjust = "tukey")
+test2<-summary(test)
+test3<-test2$`pairwise differences of contrast`
+length(test3$p.value)
+test4<-data.frame(contrast=factor(test3$contrast),
+                  pvalue=factor(test3$p.value))
+stargazer(test4,summary=FALSE, title="Tukey HSD Contrasts")
+```
+
+###Attack Graph
+Finally, We graphed the total number of attacks given by each species and sex. Females are squares and males are triangles.
+```{r echo=FALSE, fig.height=6, fig.width=8}
+AttackGraph<-ggplot(DF, aes(x= Species, y=Attacks, fill=Sex)) + 
+  geom_point(position=position_jitterdodge(dodge.width=0.9),aes(shape=factor(Sex)),size=2) +
+  scale_shape_manual(values=c(15, 6))+
+  geom_boxplot(outlier.colour = NA,alpha = 1, position = position_dodge(width=0.9)) +
+  scale_fill_brewer(palette=6)+
+  scale_y_continuous(limits=c(-0.5,55), expand=c(0,0))+
+  scale_x_discrete()+
+  scale_x_discrete(limits=c("A3","A","M","P"),labels=c("A3" = "North Carolina\nGeneralist",
+                                                       "A" = "San Salvador\nGeneralist",
+                                                       "M" = "San Salvador\nSnail-Eater", 
+                                                       "P"="San Salvador\nScale-Eater"))+
+  mytheme+ theme(legend.position="none")
+
+AttackGraph<-AttackGraph+ theme(axis.ticks.length = unit(0.2, "cm"),
+                                axis.text.x = element_text(margin = margin(0.2, unit = "cm"))) +
+print(AttackGraph)
+```
+
